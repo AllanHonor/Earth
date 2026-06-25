@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Holographic Earth</title>
+    <style>
+        * { box-sizing: border-box; }
+        body, html { 
+            margin: 0; padding: 0; width: 100%; height: 100%; 
+            background: #000; overflow: hidden; 
+            font-family: 'Courier New', Courier, monospace; 
+            color: #0ff; user-select: none;
+        }
+        canvas { 
+            display: block; 
+            cursor: grab;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+        #ui-layer { 
+            position: absolute; top: 0; left: 0; 
+            width: 100%; height: 100%; 
+            pointer-events: none; 
+            opacity: 0; transition: opacity 2s ease-in;
+        }
+        .hud-panel { 
+            position: absolute; padding: 25px; 
+            border: 1px solid rgba(0, 255, 255, 0.2); 
+            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(0,20,30,0.7), rgba(0,10,15,0.9));
+            box-shadow: inset 0 0 20px rgba(0, 255, 255, 0.05), 0 0 15px rgba(0, 255, 255, 0.1);
+            backdrop-filter: blur(5px);
+        }
+        .top-left { 
+            top: 40px; left: 40px; 
+            animation: slideInLeft 1.5s ease-out forwards;
+        }
+        .bottom-right { 
+            bottom: 40px; right: 40px; 
+            animation: slideInRight 1.5s ease-out forwards;
+        }
+        .bottom-left { 
+            bottom: 40px; left: 40px; 
+            width: 320px;
+            animation: slideInUp 1.5s ease-out forwards;
+        }
+        
+        @keyframes slideInLeft {
+            from { transform: translateX(-50px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideInRight {
+            from { transform: translateX(50px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideInUp {
+            from { transform: translateY(50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        h1 { 
+            margin: 0 0 15px 0; font-size: 28px; color: #fff; 
+            letter-spacing: 6px; text-shadow: 0 0 10px #0ff; 
+            font-weight: normal;
+        }
+        h2 { 
+            margin: 0 0 10px 0; font-size: 16px; color: #0ff; 
+            letter-spacing: 2px; border-bottom: 1px solid rgba(0,255,255,0.3);
+            padding-bottom: 5px;
+        }
+        ul { list-style: none; padding: 0; margin: 0; }
+        li { margin-bottom: 10px; font-size: 14px; color: #ddd; letter-spacing: 1px; }
+        .label { color: #0ff; display: inline-block; width: 110px; font-weight: bold; }
+        
+        .scanlines { 
+            position: absolute; top: 0; left: 0; 
+            width: 100%; height: 100%; 
+            background: linear-gradient(to bottom, transparent 50%, rgba(0,255,255,0.03) 51%); 
+            background-size: 100% 4px; 
+            pointer-events: none;
+            animation: scan 10s linear infinite;
+        }
+        @keyframes scan {
+            0% { background-position: 0 0; }
+            100% { background-position: 0 100vh; }
+        }
+        
+        .vignette { 
+            position: absolute; top: 0; left: 0; 
+            width: 100%; height: 100%; 
+            box-shadow: inset 0 0 200px rgba(0,0,0,0.9); 
+            pointer-events: none; 
+        }
+        
+        #loading { 
+            position: absolute; top: 50%; left: 50%; 
+            transform: translate(-50%, -50%); 
+            color: #0ff; font-size: 22px; letter-spacing: 4px; 
+            text-shadow: 0 0 10px #0ff;
+            animation: pulse 1s infinite alternate;
+        }
+        @keyframes pulse {
+            from { opacity: 0.4; }
+            to { opacity: 1; }
+        }
+
+        #console-text {
+            font-size: 12px; color: #88ff88; line-height: 1.6;
+            height: 100px; overflow: hidden;
+            text-shadow: 0 0 5px rgba(136, 255, 136, 0.5);
+        }
+        
+        .corner-bracket {
+            position: absolute;
+            width: 20px; height: 20px;
+            border: 2px solid #0ff;
+        }
+        .cb-tl { top: -2px; left: -2px; border-right: none; border-bottom: none; }
+        .cb-tr { top: -2px; right: -2px; border-left: none; border-bottom: none; }
+        .cb-bl { bottom: -2px; left: -2px; border-right: none; border-top: none; }
+        .cb-br { bottom: -2px; right: -2px; border-left: none; border-top: none; }
+        
+        @media (max-width: 768px) {
+            .hud-panel { padding: 15px; }
+            h1 { font-size: 18px; }
+            h2 { font-size: 14px; }
+            li { font-size: 11px; margin-bottom: 6px;}
+            .label { width: 80px; }
+            .top-left { top: 10px; left: 10px; }
+            .bottom-right { bottom: 10px; right: 10px; }
+            .bottom-left { bottom: 10px; left: 10px; width: 220px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">INITIALIZING SYSTEM...</div>
+    <canvas id="globeCanvas"></canvas>
+    
+    <div id="ui-layer">
+        <div class="scanlines"></div>
+        <div class="vignette"></div>
+
+        <div class="hud-panel top-left">
+            <div class="corner-bracket cb-tl"></div>
+            <div class="corner-bracket cb-tr"></div>
+            <div class="corner-bracket cb-bl"></div>
+            <div class="corner-bracket cb-br"></div>
+            <h1>EARTH_SYS</h1>
+            <ul>
+                <li><span class="label">STATUS:</span> <span style="color:#0f0">NOMINAL</span></li>
+                <li><span class="label">CLASS:</span> TERRESTRIAL</li>
+                <li><span class="label">RADIUS:</span> 6,371 KM</li>
+                <li><span class="label">MASS:</span> 5.972 × 10²⁴ KG</li>
+                <li><span class="label">AGE:</span> 4.54B YEARS</li>
+            </ul>
+        </div>
+        
+        <div class="hud-panel bottom-right">
+            <div class="corner-bracket cb-tl"></div>
+            <div class="corner-bracket cb-tr"></div>
+            <div class="corner-bracket cb-bl"></div>
+            <div class="corner-bracket cb-br"></div>
+            <h2>ENVIRONMENT</h2>
+            <ul>
+                <li><span class="label">POPULATION:</span> 8.1B+</li>
+                <li><span class="label">ATMOSPHERE:</span> N₂ 78%, O₂ 21%</li>
+                <li><span class="label">SURFACE:</span> 71% H₂O</li>
+                <li><span class="label">GRAVITY:</span> 9.807 m/s²</li>
+            </ul>
+        </div>
+
+        <div class="hud-panel bottom-left">
+            <div class="corner-bracket cb-tl"></div>
+            <div class="corner-bracket cb-tr"></div>
+            <div class="corner-bracket cb-bl"></div>
+            <div class="corner-bracket cb-br"></div>
+            <h2>TERMINAL</h2>
+            <div id="console-text"></div>
+        </div>
+    </div>
+
+    <script>
+        // Earth Base64 Image Map (128x64 generated equirectangular mask)
+        const earthBase64 = "data:image/jpeg;base64,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";
+
+        const canvas = document.getElementById('globeCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        let width = canvas.width = window.innerWidth;
+        let height = canvas.height = window.innerHeight;
+
+        const uiLayer = document.getElementById('ui-layer');
+        const loading = document.getElementById('loading');
+
+        let R = Math.min(width, height) * 0.35;
+        const numParticles = 12000;
+        let particles = [];
+        let stars = [];
+
+        let rotX = -0.3; // Initial tilt
+        let rotY = 0;
+        let targetRotX = -0.3;
+        let targetRotY = 0;
+        let isDragging = false;
+        let previousMouse = { x: 0, y: 0 };
+        let autoRotateSpeed = 0.002;
+
+        window.addEventListener('resize', () => {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            R = Math.min(width, height) * 0.35;
+        });
+
+        // Mouse interactions
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            previousMouse = { x: e.clientX, y: e.clientY };
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const deltaX = e.clientX - previousMouse.x;
+                const deltaY = e.clientY - previousMouse.y;
+                targetRotY += deltaX * 0.004;
+                targetRotX += deltaY * 0.004;
+                previousMouse = { x: e.clientX, y: e.clientY };
+            } else {
+                const mouseX = (e.clientX / width) * 2 - 1;
+                const mouseY = (e.clientY / height) * 2 - 1;
+                targetRotX = -0.3 + mouseY * 0.15;
+                autoRotateSpeed = 0.002 + mouseX * 0.003;
+            }
+        });
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('mouseleave', () => isDragging = false);
+
+        // Touch support
+        canvas.addEventListener('touchstart', (e) => {
+            isDragging = true;
+            previousMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        });
+        window.addEventListener('touchmove', (e) => {
+            if (isDragging) {
+                const deltaX = e.touches[0].clientX - previousMouse.x;
+                const deltaY = e.touches[0].clientY - previousMouse.y;
+                targetRotY += deltaX * 0.005;
+                targetRotX += deltaY * 0.005;
+                previousMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+        });
+        window.addEventListener('touchend', () => isDragging = false);
+
+        function initStars() {
+            for (let i = 0; i < 600; i++) {
+                stars.push({
+                    x: Math.random() * width,
+                    y: Math.random() * height,
+                    size: Math.random() * 1.5,
+                    alpha: Math.random(),
+                    speed: (Math.random() * 0.02) + 0.005
+                });
+            }
+        }
+
+        function drawStars() {
+            stars.forEach(s => {
+                s.alpha += s.speed;
+                if (s.alpha > 1) { s.alpha = 1; s.speed *= -1; }
+                if (s.alpha < 0) { s.alpha = 0; s.speed *= -1; }
+                ctx.fillStyle = `rgba(255, 255, 255, ${s.alpha})`;
+                ctx.fillRect(s.x, s.y, s.size, s.size);
+            });
+        }
+
+        // Load map and initialize
+        const img = new Image();
+        img.onload = () => {
+            const offCanvas = document.createElement('canvas');
+            const offCtx = offCanvas.getContext('2d');
+            const imgW = offCanvas.width = img.width;
+            const imgH = offCanvas.height = img.height;
+            offCtx.drawImage(img, 0, 0);
+            const imgData = offCtx.getImageData(0, 0, imgW, imgH).data;
+
+            for(let i = 0; i < numParticles; i++) {
+                const phi = Math.acos(1 - 2 * (i + 0.5) / numParticles);
+                const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+
+                const x = Math.sin(phi) * Math.cos(theta);
+                const y = Math.cos(phi);
+                const z = Math.sin(phi) * Math.sin(theta);
+
+                let u = (theta % (2 * Math.PI)) / (2 * Math.PI);
+                if (u < 0) u += 1;
+                let v = phi / Math.PI;
+
+                const px = Math.floor(u * imgW);
+                const py = Math.floor(v * imgH);
+                const idx = (py * imgW + px) * 4;
+
+                const r = imgData[idx];
+                const g = imgData[idx+1];
+                const b = imgData[idx+2];
+                const brightness = (r + g + b) / 3;
+
+                particles.push({ x, y, z, r, g, b, brightness });
+            }
+
+            loading.style.display = 'none';
+            uiLayer.style.opacity = '1';
+            initStars();
+            startTerminal();
+            requestAnimationFrame(render);
+        };
+        img.src = earthBase64;
+
+        function drawRing(radius, yOffset, cx, cy, cosX, sinX, cosY, sinY, focalLength) {
+            ctx.beginPath();
+            let isFirst = true;
+            for (let i = 0; i <= 80; i++) {
+                const angle = (i / 80) * Math.PI * 2;
+                const ox = Math.cos(angle) * radius;
+                const oz = Math.sin(angle) * radius;
+                const oy = yOffset;
+
+                const x1 = ox * cosY - oz * sinY;
+                const z1 = oz * cosY + ox * sinY;
+                const y2 = oy * cosX - z1 * sinX;
+                const z2 = z1 * cosX + oy * sinX;
+
+                // Only draw the front arc of the rings
+                if (z2 > 0.1) {
+                    isFirst = true;
+                    continue; 
+                }
+
+                const scale = focalLength / (focalLength + z2 * R);
+                const x2d = cx + x1 * R * scale;
+                const y2d = cy + y2 * R * scale;
+
+                if (isFirst) {
+                    ctx.moveTo(x2d, y2d);
+                    isFirst = false;
+                } else {
+                    ctx.lineTo(x2d, y2d);
+                }
+            }
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.25)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+
+        function render() {
+            // Clear background
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+
+            drawStars();
+
+            // Background Sun/Nebula Glow
+            const sunX = width * 0.7;
+            const sunY = height * 0.3;
+            const sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, width * 0.5);
+            sunGrad.addColorStop(0, 'rgba(0, 150, 255, 0.15)');
+            sunGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx.fillStyle = sunGrad;
+            ctx.fillRect(0, 0, width, height);
+
+            // Update rotation
+            if (!isDragging) {
+                targetRotY -= autoRotateSpeed;
+            }
+            rotX += (targetRotX - rotX) * 0.1;
+            rotY += (targetRotY - rotY) * 0.1;
+
+            if (targetRotX > Math.PI / 2.5) targetRotX = Math.PI / 2.5;
+            if (targetRotX < -Math.PI / 2.5) targetRotX = -Math.PI / 2.5;
+
+            const cx = width / 2;
+            const cy = height / 2;
+            const focalLength = width;
+
+            // Earth atmospheric glow
+            const gradient = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, R * 1.3);
+            gradient.addColorStop(0, 'rgba(0, 50, 100, 0.6)');
+            gradient.addColorStop(0.5, 'rgba(0, 100, 255, 0.2)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(cx - R*1.5, cy - R*1.5, R*3, R*3);
+
+            const cosX = Math.cos(rotX);
+            const sinX = Math.sin(rotX);
+            const cosY = Math.cos(rotY);
+            const sinY = Math.sin(rotY);
+
+            // Draw rings
+            drawRing(1.15, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength);
+            drawRing(1.4, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength);
+
+            // Draw particles
+            for (let i = 0; i < numParticles; i++) {
+                const p = particles[i];
+
+                const x1 = p.x * cosY - p.z * sinY;
+                const z1 = p.z * cosY + p.x * sinY;
+                const y2 = p.y * cosX - z1 * sinX;
+                const z2 = z1 * cosX + p.y * sinX;
+
+                const scale = focalLength / (focalLength + z2 * R);
+                const x2d = cx + x1 * R * scale;
+                const y2d = cy + y2 * R * scale;
+
+                // Color tinting for holographic effect
+                const mix = 0.7; 
+                const colR = Math.floor(p.r * (1 - mix));
+                const colG = Math.floor(p.g * (1 - mix) + 255 * mix);
+                const colB = Math.floor(p.b * (1 - mix) + 255 * mix);
+
+                let alpha = 0;
+                let size = scale;
+
+                if (z2 > 0) {
+                    // Back side (transparent hologram)
+                    alpha = 0.05;
+                    size = scale * 0.5;
+                } else {
+                    // Front side
+                    const isLand = p.brightness > 50; 
+                    alpha = Math.min(1, Math.abs(z2) + 0.1) * (isLand ? 0.9 : 0.15);
+                    size = scale * (isLand ? 1.3 : 0.6);
+                }
+
+                ctx.fillStyle = `rgba(${colR}, ${colG}, ${colB}, ${alpha})`;
+                ctx.fillRect(x2d, y2d, size, size);
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        // Terminal animation
+        function startTerminal() {
+            const consoleLines = [
+                "UPLINK ESTABLISHED.",
+                "INITIALIZING GEO-SCAN...",
+                "MAPPING CONTINENTAL DRIFT...",
+                "DETECTING ATMOSPHERIC COMPOSITION...",
+                "ANALYZING BIOMES...",
+                "SYNCHRONIZING ORBITAL DATA...",
+                "CALCULATING TRAJECTORY...",
+                "DATA STREAM STABLE."
+            ];
+            const consoleDiv = document.getElementById('console-text');
+            let lineIdx = 0;
+            let currentLines = [];
+
+            setInterval(() => {
+                if (lineIdx < consoleLines.length) {
+                    currentLines.push("> " + consoleLines[lineIdx]);
+                    if(currentLines.length > 5) currentLines.shift();
+                    consoleDiv.innerHTML = currentLines.join('<br>');
+                    lineIdx++;
+                } else {
+                    currentLines.push("> AWAITING COMMAND...");
+                    if(currentLines.length > 5) currentLines.shift();
+                    consoleDiv.innerHTML = currentLines.join('<br>');
+                    lineIdx = 0; // Restart loop for effect
+                    currentLines = [];
+                }
+            }, 1500);
+        }
+    </script>
+</body>
+</html>
