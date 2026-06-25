@@ -210,7 +210,22 @@
             width = canvas.width = window.innerWidth;
             height = canvas.height = window.innerHeight;
             R = Math.min(width, height) * 0.35;
+            updateGradients();
         });
+
+        let sunGrad, atmosphereGrad;
+        function updateGradients() {
+            const cx = width * 0.5, cy = height * 0.5;
+            const sunX = width * 0.7, sunY = height * 0.3;
+            sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, width * 0.5);
+            sunGrad.addColorStop(0, 'rgba(0, 150, 255, 0.15)');
+            sunGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+            atmosphereGrad = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, R * 1.3);
+            atmosphereGrad.addColorStop(0, 'rgba(0, 50, 100, 0.6)');
+            atmosphereGrad.addColorStop(0.5, 'rgba(0, 100, 255, 0.2)');
+            atmosphereGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        }
 
         // Mouse interactions
         canvas.addEventListener('mousedown', (e) => {
@@ -263,14 +278,24 @@
         }
 
         function drawStars() {
-            stars.forEach(s => {
+            ctx.fillStyle = '#fff';
+            for (let i = 0; i < stars.length; i++) {
+                const s = stars[i];
                 s.alpha += s.speed;
-                if (s.alpha > 1) { s.alpha = 1; s.speed *= -1; }
-                if (s.alpha < 0) { s.alpha = 0; s.speed *= -1; }
-                ctx.fillStyle = `rgba(255, 255, 255, ${s.alpha})`;
+                if (s.alpha > 1) { s.alpha = 1; s.speed = -s.speed; }
+                else if (s.alpha < 0) { s.alpha = 0; s.speed = -s.speed; }
+                ctx.globalAlpha = s.alpha;
                 ctx.fillRect(s.x, s.y, s.size, s.size);
-            });
+            }
+            ctx.globalAlpha = 1;
         }
+
+        // Optimized Particle Storage
+        const pX = new Float32Array(numParticles);
+        const pY = new Float32Array(numParticles);
+        const pZ = new Float32Array(numParticles);
+        const pColorBase = new Array(numParticles);
+        const pIsLand = new Uint8Array(numParticles);
 
         // Load map and initialize
         const img = new Image();
@@ -286,64 +311,62 @@
                 const phi = Math.acos(1 - 2 * (i + 0.5) / numParticles);
                 const theta = Math.PI * (1 + Math.sqrt(5)) * i;
 
-                const x = Math.sin(phi) * Math.cos(theta);
-                const y = Math.cos(phi);
-                const z = Math.sin(phi) * Math.sin(theta);
+                pX[i] = Math.sin(phi) * Math.cos(theta);
+                pY[i] = Math.cos(phi);
+                pZ[i] = Math.sin(phi) * Math.sin(theta);
 
                 let u = (theta % (2 * Math.PI)) / (2 * Math.PI);
                 if (u < 0) u += 1;
                 let v = phi / Math.PI;
 
-                const px = Math.floor(u * imgW);
-                const py = Math.floor(v * imgH);
+                const px = Math.floor(u * (imgW - 1));
+                const py = Math.floor(v * (imgH - 1));
                 const idx = (py * imgW + px) * 4;
 
-                const r = imgData[idx];
-                const g = imgData[idx+1];
-                const b = imgData[idx+2];
+                const r = imgData[idx], g = imgData[idx+1], b = imgData[idx+2];
                 const brightness = (r + g + b) / 3;
 
-                particles.push({ x, y, z, r, g, b, brightness });
+                const mix = 0.7;
+                const colR = (r * (1 - mix)) | 0;
+                const colG = (g * (1 - mix) + 255 * mix) | 0;
+                const colB = (b * (1 - mix) + 255 * mix) | 0;
+
+                pColorBase[i] = `rgb(${colR},${colG},${colB})`;
+                pIsLand[i] = brightness > 50 ? 1 : 0;
             }
 
             loading.style.display = 'none';
             uiLayer.style.opacity = '1';
+            updateGradients();
             initStars();
             startTerminal();
             requestAnimationFrame(render);
         };
         img.src = earthBase64;
 
+        const ringPoints = new Float32Array(162);
+        for (let i = 0; i <= 80; i++) {
+            const a = (i / 80) * 6.283185;
+            ringPoints[i*2] = Math.cos(a);
+            ringPoints[i*2+1] = Math.sin(a);
+        }
+
         function drawRing(radius, yOffset, cx, cy, cosX, sinX, cosY, sinY, focalLength) {
             ctx.beginPath();
             let isFirst = true;
             for (let i = 0; i <= 80; i++) {
-                const angle = (i / 80) * Math.PI * 2;
-                const ox = Math.cos(angle) * radius;
-                const oz = Math.sin(angle) * radius;
-                const oy = yOffset;
-
+                const ox = ringPoints[i*2] * radius;
+                const oz = ringPoints[i*2+1] * radius;
                 const x1 = ox * cosY - oz * sinY;
                 const z1 = oz * cosY + ox * sinY;
-                const y2 = oy * cosX - z1 * sinX;
-                const z2 = z1 * cosX + oy * sinX;
+                const y2 = yOffset * cosX - z1 * sinX;
+                const z2 = z1 * cosX + yOffset * sinX;
 
-                // Only draw the front arc of the rings
-                if (z2 > 0.1) {
-                    isFirst = true;
-                    continue; 
-                }
+                if (z2 > 0.1) { isFirst = true; continue; }
 
-                const scale = focalLength / (focalLength + z2 * R);
-                const x2d = cx + x1 * R * scale;
-                const y2d = cy + y2 * R * scale;
-
-                if (isFirst) {
-                    ctx.moveTo(x2d, y2d);
-                    isFirst = false;
-                } else {
-                    ctx.lineTo(x2d, y2d);
-                }
+                const sR = (focalLength / (focalLength + z2 * R)) * R;
+                if (isFirst) { ctx.moveTo(cx + x1 * sR, cy + y2 * sR); isFirst = false; }
+                else { ctx.lineTo(cx + x1 * sR, cy + y2 * sR); }
             }
             ctx.strokeStyle = 'rgba(0, 255, 255, 0.25)';
             ctx.lineWidth = 1;
@@ -351,89 +374,56 @@
         }
 
         function render() {
-            // Clear background
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, width, height);
 
             drawStars();
 
-            // Background Sun/Nebula Glow
-            const sunX = width * 0.7;
-            const sunY = height * 0.3;
-            const sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, width * 0.5);
-            sunGrad.addColorStop(0, 'rgba(0, 150, 255, 0.15)');
-            sunGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
             ctx.fillStyle = sunGrad;
             ctx.fillRect(0, 0, width, height);
 
-            // Update rotation
-            if (!isDragging) {
-                targetRotY -= autoRotateSpeed;
-            }
+            if (!isDragging) targetRotY -= autoRotateSpeed;
             rotX += (targetRotX - rotX) * 0.1;
             rotY += (targetRotY - rotY) * 0.1;
 
-            if (targetRotX > Math.PI / 2.5) targetRotX = Math.PI / 2.5;
-            if (targetRotX < -Math.PI / 2.5) targetRotX = -Math.PI / 2.5;
+            if (targetRotX > 1.25) targetRotX = 1.25;
+            if (targetRotX < -1.25) targetRotX = -1.25;
 
-            const cx = width / 2;
-            const cy = height / 2;
-            const focalLength = width;
+            const cx = width * 0.5, cy = height * 0.5, focalLength = width;
+            ctx.fillStyle = atmosphereGrad;
+            ctx.fillRect(cx - R * 1.5, cy - R * 1.5, R * 3, R * 3);
 
-            // Earth atmospheric glow
-            const gradient = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, R * 1.3);
-            gradient.addColorStop(0, 'rgba(0, 50, 100, 0.6)');
-            gradient.addColorStop(0.5, 'rgba(0, 100, 255, 0.2)');
-            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(cx - R*1.5, cy - R*1.5, R*3, R*3);
+            const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
+            const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
 
-            const cosX = Math.cos(rotX);
-            const sinX = Math.sin(rotX);
-            const cosY = Math.cos(rotY);
-            const sinY = Math.sin(rotY);
-
-            // Draw rings
             drawRing(1.15, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength);
             drawRing(1.4, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength);
 
-            // Draw particles
+            let lastAlpha = -1, lastFill = '';
             for (let i = 0; i < numParticles; i++) {
-                const p = particles[i];
-
-                const x1 = p.x * cosY - p.z * sinY;
-                const z1 = p.z * cosY + p.x * sinY;
-                const y2 = p.y * cosX - z1 * sinX;
-                const z2 = z1 * cosX + p.y * sinX;
+                const px = pX[i], py = pY[i], pz = pZ[i];
+                const x1 = px * cosY - pz * sinY;
+                const z1 = pz * cosY + px * sinY;
+                const y2 = py * cosX - z1 * sinX;
+                const z2 = z1 * cosX + py * sinX;
 
                 const scale = focalLength / (focalLength + z2 * R);
-                const x2d = cx + x1 * R * scale;
-                const y2d = cy + y2 * R * scale;
+                const sR = scale * R;
 
-                // Color tinting for holographic effect
-                const mix = 0.7; 
-                const colR = Math.floor(p.r * (1 - mix));
-                const colG = Math.floor(p.g * (1 - mix) + 255 * mix);
-                const colB = Math.floor(p.b * (1 - mix) + 255 * mix);
-
-                let alpha = 0;
-                let size = scale;
-
+                let alpha, size;
                 if (z2 > 0) {
-                    // Back side (transparent hologram)
                     alpha = 0.05;
                     size = scale * 0.5;
                 } else {
-                    // Front side
-                    const isLand = p.brightness > 50; 
-                    alpha = Math.min(1, Math.abs(z2) + 0.1) * (isLand ? 0.9 : 0.15);
-                    size = scale * (isLand ? 1.3 : 0.6);
+                    alpha = Math.min(1, -z2 + 0.1) * (pIsLand[i] ? 0.9 : 0.15);
+                    size = scale * (pIsLand[i] ? 1.3 : 0.6);
                 }
 
-                ctx.fillStyle = `rgba(${colR}, ${colG}, ${colB}, ${alpha})`;
-                ctx.fillRect(x2d, y2d, size, size);
+                if (alpha !== lastAlpha) ctx.globalAlpha = lastAlpha = alpha;
+                if (pColorBase[i] !== lastFill) ctx.fillStyle = lastFill = pColorBase[i];
+                ctx.fillRect(cx + x1 * sR, cy + y2 * sR, size, size);
             }
-
+            ctx.globalAlpha = 1;
             requestAnimationFrame(render);
         }
 
