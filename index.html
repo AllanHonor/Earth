@@ -149,11 +149,11 @@
             <div class="corner-bracket cb-br"></div>
             <h1>EARTH_SYS</h1>
             <ul>
-                <li><span class="label">STATUS:</span> <span style="color:#0f0">NOMINAL</span></li>
-                <li><span class="label">CLASS:</span> TERRESTRIAL</li>
+                <li><span class="label">STATUS:</span> <span id="sys-status" style="color:#0f0">NOMINAL</span></li>
+                <li><span class="label">ZOOM:</span> <span id="zoom-val">1.0x</span></li>
                 <li><span class="label">RADIUS:</span> 6,371 KM</li>
                 <li><span class="label">MASS:</span> 5.972 × 10²⁴ KG</li>
-                <li><span class="label">AGE:</span> 4.54B YEARS</li>
+                <li><span class="label">COORDS:</span> <span id="coord-val" style="color:#88ff88">0.0, 0.0</span></li>
             </ul>
         </div>
         
@@ -165,9 +165,13 @@
             <h2>ENVIRONMENT</h2>
             <ul>
                 <li><span class="label">POPULATION:</span> 8.1B+</li>
-                <li><span class="label">ATMOSPHERE:</span> N₂ 78%, O₂ 21%</li>
                 <li><span class="label">SURFACE:</span> 71% H₂O</li>
                 <li><span class="label">GRAVITY:</span> 9.807 m/s²</li>
+                <li><div style="margin-top:10px; font-size:10px;">SCANNING...</div>
+                    <div style="width:100%; height:4px; background:rgba(0,255,255,0.1); margin-top:4px;">
+                        <div id="scan-bar" style="width:40%; height:100%; background:#0ff; box-shadow:0 0 10px #0ff;"></div>
+                    </div>
+                </li>
             </ul>
         </div>
 
@@ -202,9 +206,17 @@
         let rotY = 0;
         let targetRotX = -0.3;
         let targetRotY = 0;
+        let zoom = 1;
+        let targetZoom = 1;
         let isDragging = false;
         let previousMouse = { x: 0, y: 0 };
         let autoRotateSpeed = 0.002;
+
+        window.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            targetZoom -= e.deltaY * 0.001;
+            targetZoom = Math.min(Math.max(targetZoom, 0.5), 3.0);
+        }, { passive: false });
 
         window.addEventListener('resize', () => {
             width = canvas.width = window.innerWidth;
@@ -221,7 +233,8 @@
             sunGrad.addColorStop(0, 'rgba(0, 150, 255, 0.15)');
             sunGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
 
-            atmosphereGrad = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, R * 1.3);
+            // Atmosphere is drawn with ctx.translate(cx, cy), so center at (0, 0)
+            atmosphereGrad = ctx.createRadialGradient(0, 0, R * 0.7, 0, 0, R * 1.3);
             atmosphereGrad.addColorStop(0, 'rgba(0, 50, 100, 0.6)');
             atmosphereGrad.addColorStop(0.5, 'rgba(0, 100, 255, 0.2)');
             atmosphereGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
@@ -351,7 +364,7 @@
             ringPoints[i*2+1] = Math.sin(a);
         }
 
-        function drawRing(radius, yOffset, cx, cy, cosX, sinX, cosY, sinY, focalLength) {
+        function drawRing(radius, yOffset, cx, cy, cosX, sinX, cosY, sinY, focalLength, currentR) {
             ctx.beginPath();
             let isFirst = true;
             for (let i = 0; i <= 80; i++) {
@@ -364,7 +377,7 @@
 
                 if (z2 > 0.1) { isFirst = true; continue; }
 
-                const sR = (focalLength / (focalLength + z2 * R)) * R;
+                const sR = (focalLength / (focalLength + z2 * currentR)) * currentR;
                 if (isFirst) { ctx.moveTo(cx + x1 * sR, cy + y2 * sR); isFirst = false; }
                 else { ctx.lineTo(cx + x1 * sR, cy + y2 * sR); }
             }
@@ -372,6 +385,49 @@
             ctx.lineWidth = 1;
             ctx.stroke();
         }
+
+        const zoomEl = document.getElementById('zoom-val');
+        const coordEl = document.getElementById('coord-val');
+        const scanBar = document.getElementById('scan-bar');
+        const sysStatus = document.getElementById('sys-status');
+        let scanProgress = 0;
+        let isOverload = false;
+
+        // Hidden Secret 1: "BOLT" Keyboard Sequence
+        let inputBuffer = "";
+        window.addEventListener('keydown', (e) => {
+            inputBuffer = (inputBuffer + e.key.toUpperCase()).slice(-4);
+            if (inputBuffer === "BOLT") {
+                triggerSecretMode();
+            }
+        });
+
+        function triggerSecretMode() {
+            autoRotateSpeed = 0.05;
+            targetZoom = 2.5;
+            sysStatus.textContent = "BOLT_MODE_ACTIVE";
+            sysStatus.style.color = "#ff0";
+            setTimeout(() => {
+                autoRotateSpeed = 0.002;
+                targetZoom = 1.0;
+                sysStatus.textContent = "NOMINAL";
+                sysStatus.style.color = "#0f0";
+            }, 3000);
+        }
+
+        // Hidden Secret 2: HUD Overload Toggle
+        sysStatus.style.pointerEvents = "auto";
+        sysStatus.style.cursor = "help";
+        sysStatus.addEventListener('click', () => {
+            isOverload = !isOverload;
+            sysStatus.textContent = isOverload ? "OVERLOAD" : "NOMINAL";
+            sysStatus.style.color = isOverload ? "#f0f" : "#0f0";
+            if (isOverload) {
+                document.body.style.filter = "hue-rotate(90deg) contrast(1.5)";
+            } else {
+                document.body.style.filter = "none";
+            }
+        });
 
         function render() {
             ctx.fillStyle = '#000';
@@ -385,19 +441,37 @@
             if (!isDragging) targetRotY -= autoRotateSpeed;
             rotX += (targetRotX - rotX) * 0.1;
             rotY += (targetRotY - rotY) * 0.1;
+            zoom += (targetZoom - zoom) * 0.1;
+
+            // Update UI periodically (avoiding every frame for performance)
+            if (Math.random() < 0.1) {
+                zoomEl.textContent = zoom.toFixed(2) + 'x';
+                const lat = (rotX * (180 / Math.PI)).toFixed(1);
+                const lon = ((-rotY % (Math.PI * 2)) * (180 / Math.PI)).toFixed(1);
+                coordEl.textContent = `${lat}, ${lon}`;
+                scanProgress = (scanProgress + (isOverload ? 5 : 1)) % 100;
+                scanBar.style.width = scanProgress + '%';
+            }
 
             if (targetRotX > 1.25) targetRotX = 1.25;
             if (targetRotX < -1.25) targetRotX = -1.25;
 
+            const currentR = R * zoom;
             const cx = width * 0.5, cy = height * 0.5, focalLength = width;
+
+            // Atmosphere scales with zoom
             ctx.fillStyle = atmosphereGrad;
-            ctx.fillRect(cx - R * 1.5, cy - R * 1.5, R * 3, R * 3);
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.scale(zoom, zoom);
+            ctx.fillRect(-R * 1.5, -R * 1.5, R * 3, R * 3);
+            ctx.restore();
 
             const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
             const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
 
-            drawRing(1.15, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength);
-            drawRing(1.4, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength);
+            drawRing(1.15, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength, currentR);
+            drawRing(1.4, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength, currentR);
 
             let lastAlpha = -1, lastFill = '';
             for (let i = 0; i < numParticles; i++) {
@@ -407,16 +481,16 @@
                 const y2 = py * cosX - z1 * sinX;
                 const z2 = z1 * cosX + py * sinX;
 
-                const scale = focalLength / (focalLength + z2 * R);
-                const sR = scale * R;
+                const scale = focalLength / (focalLength + z2 * currentR);
+                const sR = scale * currentR;
 
                 let alpha, size;
                 if (z2 > 0) {
                     alpha = 0.05;
-                    size = scale * 0.5;
+                    size = scale * 0.5 * zoom;
                 } else {
                     alpha = Math.min(1, -z2 + 0.1) * (pIsLand[i] ? 0.9 : 0.15);
-                    size = scale * (pIsLand[i] ? 1.3 : 0.6);
+                    size = scale * (pIsLand[i] ? 1.3 : 0.6) * zoom;
                 }
 
                 if (alpha !== lastAlpha) ctx.globalAlpha = lastAlpha = alpha;
