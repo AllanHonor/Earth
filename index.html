@@ -33,6 +33,7 @@
             box-shadow: inset 0 0 20px rgba(0, 255, 255, 0.05), 0 0 15px rgba(0, 255, 255, 0.1);
             backdrop-filter: blur(2px);
             transition: transform 0.1s ease-out;
+            pointer-events: auto;
         }
         .top-left { 
             top: 40px; left: 40px; 
@@ -75,6 +76,28 @@
         li { margin-bottom: 10px; font-size: 14px; color: #ddd; letter-spacing: 1px; }
         .label { color: #0ff; display: inline-block; width: 110px; font-weight: bold; }
         
+        .btn {
+            background: rgba(0, 255, 255, 0.1);
+            border: 1px solid #0ff;
+            color: #0ff;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 10px;
+            letter-spacing: 1px;
+            transition: all 0.2s;
+            margin: 5px 5px 0 0;
+            display: inline-block;
+        }
+        .btn:hover {
+            background: rgba(0, 255, 255, 0.3);
+            box-shadow: 0 0 10px #0ff;
+        }
+        .btn.active {
+            background: #0ff;
+            color: #000;
+        }
+
         .scanlines { 
             position: absolute; top: 0; left: 0; 
             width: 100%; height: 100%; 
@@ -183,6 +206,12 @@
             <div class="corner-bracket cb-br"></div>
             <h2>TERMINAL</h2>
             <div id="console-text"></div>
+            <div style="margin-top: 15px; border-top: 1px solid rgba(0,255,255,0.2); padding-top: 10px;">
+                <div class="btn active" id="toggle-stars">STARS</div>
+                <div class="btn active" id="toggle-sats">SATS</div>
+                <div class="btn active" id="toggle-labels">LABELS</div>
+                <div class="btn" id="manual-scan">MANUAL SCAN</div>
+            </div>
         </div>
     </div>
 
@@ -212,9 +241,17 @@
         let zoom = 1;
         let targetZoom = 1;
         let isDragging = false;
+        let isPaused = false;
         let previousMouse = { x: 0, y: 0 };
         let mousePos = { x: 0, y: 0 }; // Current mouse position
         let autoRotateSpeed = 0.002;
+
+        let showStars = true;
+        let showSats = true;
+        let showLabels = true;
+        let manualScanY = -1;
+
+        let sonarPulse = { active: false, x: 0, y: 0, radius: 0, maxRadius: 300 };
 
         window.addEventListener('wheel', (e) => {
             e.preventDefault();
@@ -248,6 +285,12 @@
         canvas.addEventListener('mousedown', (e) => {
             isDragging = true;
             previousMouse = { x: e.clientX, y: e.clientY };
+
+            // Trigger Sonar Pulse on click
+            sonarPulse.active = true;
+            sonarPulse.radius = 0;
+            sonarPulse.x = e.clientX;
+            sonarPulse.y = e.clientY;
         });
         window.addEventListener('mousemove', (e) => {
             mousePos.x = e.clientX;
@@ -409,6 +452,9 @@
         const pX = new Float32Array(numParticles);
         const pY = new Float32Array(numParticles);
         const pZ = new Float32Array(numParticles);
+        const pOrigX = new Float32Array(numParticles);
+        const pOrigY = new Float32Array(numParticles);
+        const pOrigZ = new Float32Array(numParticles);
         const pVX = new Float32Array(numParticles); // Velocity X
         const pVY = new Float32Array(numParticles); // Velocity Y
         const pVZ = new Float32Array(numParticles); // Velocity Z
@@ -444,9 +490,9 @@
                 const phi = Math.acos(1 - 2 * (i + 0.5) / numParticles);
                 const theta = Math.PI * (1 + Math.sqrt(5)) * i;
 
-                pX[i] = Math.sin(phi) * Math.cos(theta);
-                pY[i] = Math.cos(phi);
-                pZ[i] = Math.sin(phi) * Math.sin(theta);
+                pOrigX[i] = pX[i] = Math.sin(phi) * Math.cos(theta);
+                pOrigY[i] = pY[i] = Math.cos(phi);
+                pOrigZ[i] = pZ[i] = Math.sin(phi) * Math.sin(theta);
 
                 let u = (theta % (2 * Math.PI)) / (2 * Math.PI);
                 if (u < 0) u += 1;
@@ -535,9 +581,25 @@
         // Hidden Secret 1: "BOLT" Keyboard Sequence
         let inputBuffer = "";
         window.addEventListener('keydown', (e) => {
-            inputBuffer = (inputBuffer + e.key.toUpperCase()).slice(-4);
+            const key = e.key.toUpperCase();
+            inputBuffer = (inputBuffer + key).slice(-4);
             if (inputBuffer === "BOLT") {
                 triggerSecretMode();
+            }
+
+            // Keyboard Shortcuts
+            if (e.code === "Space") {
+                e.preventDefault();
+                isPaused = !isPaused;
+                sysStatus.textContent = isPaused ? "SYSTEM_PAUSED" : (isOverload ? "OVERLOAD" : "NOMINAL");
+                sysStatus.style.color = isPaused ? "#f80" : (isOverload ? "#f0f" : "#0f0");
+            }
+            if (key === "R") {
+                targetRotX = -0.3;
+                targetZoom = 1.0;
+            }
+            if (key === "S") {
+                manualScanY = 0;
             }
         });
 
@@ -568,16 +630,34 @@
             }
         });
 
+        const hudPanels = []; // Cache panels
         function render() {
+            if (hudPanels.length === 0) {
+                document.querySelectorAll('.hud-panel').forEach(p => hudPanels.push(p));
+            }
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, width, height);
 
-            drawStars();
+            if (showStars) drawStars();
+
+            // Draw Sonar Pulse
+            if (sonarPulse.active) {
+                sonarPulse.radius += 10;
+                if (sonarPulse.radius > sonarPulse.maxRadius) {
+                    sonarPulse.active = false;
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(sonarPulse.x, sonarPulse.y, sonarPulse.radius, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(0, 255, 255, ${1 - sonarPulse.radius / sonarPulse.maxRadius})`;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            }
 
             ctx.fillStyle = sunGrad;
             ctx.fillRect(0, 0, width, height);
 
-            if (!isDragging) targetRotY -= autoRotateSpeed;
+            if (!isDragging && !isPaused) targetRotY -= autoRotateSpeed;
             rotX += (targetRotX - rotX) * 0.1;
             rotY += (targetRotY - rotY) * 0.1;
             zoom += (targetZoom - zoom) * 0.1;
@@ -595,10 +675,10 @@
             // Iron Man AR HUD Tilt Effect (Smooth)
             const tiltX = (mousePos.y / height - 0.5) * 20;
             const tiltY = (mousePos.x / width - 0.5) * -20;
-            const panels = document.querySelectorAll('.hud-panel');
-            panels.forEach(p => {
-                p.style.transform = `perspective(1000px) rotateX(${tiltX}deg) rotateY(${tiltY}deg) translateZ(20px)`;
-            });
+            const tiltTransform = `perspective(1000px) rotateX(${tiltX}deg) rotateY(${tiltY}deg) translateZ(20px)`;
+            for (let i = 0; i < hudPanels.length; i++) {
+                hudPanels[i].style.transform = tiltTransform;
+            }
 
             if (targetRotX > 1.25) targetRotX = 1.25;
             if (targetRotX < -1.25) targetRotX = -1.25;
@@ -620,12 +700,30 @@
             drawRing(1.15, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength, currentR);
             drawRing(1.4, 0, cx, cy, cosX, sinX, cosY, sinY, focalLength, currentR);
 
-            drawSatellites(cx, cy, cosX, sinX, cosY, sinY, focalLength, currentR);
+            if (showSats) drawSatellites(cx, cy, cosX, sinX, cosY, sinY, focalLength, currentR);
+
+            // Manual Scan Effect
+            if (manualScanY !== -1) {
+                ctx.beginPath();
+                ctx.moveTo(0, manualScanY);
+                ctx.lineTo(width, manualScanY);
+                ctx.strokeStyle = 'rgba(0, 255, 255, 0.5)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Scan bloom
+                ctx.fillStyle = 'rgba(0, 255, 255, 0.05)';
+                ctx.fillRect(0, manualScanY - 50, width, 100);
+
+                manualScanY += 15;
+                if (manualScanY > height) manualScanY = -1;
+            }
 
             // Draw POI Labels (Iron Man Style)
-            ctx.font = '10px Courier New';
-            ctx.textAlign = 'left';
-            poi.forEach(p => {
+            if (showLabels) {
+                ctx.font = '10px Courier New';
+                ctx.textAlign = 'left';
+                poi.forEach(p => {
                 const phi = (90 - p.lat) * (Math.PI / 180);
                 const theta = (p.lon + 180) * (Math.PI / 180) + rotY;
 
@@ -661,18 +759,22 @@
                     ctx.fillText(p.name, screenX + 25, screenY - 20);
                 }
             });
+            }
 
             let lastAlpha = -1, lastFill = '';
             for (let i = 0; i < numParticles; i++) {
+                // Rotation & Projection (Pre-move)
+                let x1 = pX[i] * cosY - pZ[i] * sinY;
+                let z1 = pZ[i] * cosY + pX[i] * sinY;
+                let y2 = pY[i] * cosX - z1 * sinX;
+                let z2 = z1 * cosX + pY[i] * sinX;
+
+                let scale = focalLength / (focalLength + z2 * currentR);
+                let sR = scale * currentR;
+                let screenX = cx + x1 * sR;
+                let screenY = cy + y2 * sR;
+
                 // Mouse Interaction: Repulsion
-                const x1_raw = pX[i] * cosY - pZ[i] * sinY;
-                const z1_raw = pZ[i] * cosY + pX[i] * sinY;
-                const y2_raw = pY[i] * cosX - z1_raw * sinX;
-                const z2_raw = z1_raw * cosX + pY[i] * sinX;
-
-                const screenX = cx + x1_raw * (focalLength / (focalLength + z2_raw * currentR)) * currentR;
-                const screenY = cy + y2_raw * (focalLength / (focalLength + z2_raw * currentR)) * currentR;
-
                 const dx = mousePos.x - screenX;
                 const dy = mousePos.y - screenY;
                 const distSq = dx * dx + dy * dy;
@@ -682,29 +784,35 @@
                     pVY[i] -= (dy / 100) * force;
                 }
 
-                // Apply velocities
+                // Sonar Pulse Reaction
+                if (sonarPulse.active) {
+                    const dxS = sonarPulse.x - screenX;
+                    const dyS = sonarPulse.y - screenY;
+                    const distS = Math.sqrt(dxS * dxS + dyS * dyS);
+                    if (Math.abs(distS - sonarPulse.radius) < 20) {
+                        const force = 0.1;
+                        pVX[i] -= (dxS / distS) * force;
+                        pVY[i] -= (dyS / distS) * force;
+                    }
+                }
+
+                // Apply velocities & Spring back
                 pX[i] += pVX[i];
                 pY[i] += pVY[i];
                 pZ[i] += pVZ[i];
 
-                // Return to original position (spring effect)
-                const phi = Math.acos(1 - 2 * (i + 0.5) / numParticles);
-                const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-                const origX = Math.sin(phi) * Math.cos(theta);
-                const origY = Math.cos(phi);
-                const origZ = Math.sin(phi) * Math.sin(theta);
+                pVX[i] = (pVX[i] + (pOrigX[i] - pX[i]) * 0.05) * 0.9;
+                pVY[i] = (pVY[i] + (pOrigY[i] - pY[i]) * 0.05) * 0.9;
+                pVZ[i] = (pVZ[i] + (pOrigZ[i] - pZ[i]) * 0.05) * 0.9;
 
-                pVX[i] = (pVX[i] + (origX - pX[i]) * 0.05) * 0.9;
-                pVY[i] = (pVY[i] + (origY - pY[i]) * 0.05) * 0.9;
-                pVZ[i] = (pVZ[i] + (origZ - pZ[i]) * 0.05) * 0.9;
+                // Re-calculate projection after move for draw
+                x1 = pX[i] * cosY - pZ[i] * sinY;
+                z1 = pZ[i] * cosY + pX[i] * sinY;
+                y2 = pY[i] * cosX - z1 * sinX;
+                z2 = z1 * cosX + pY[i] * sinX;
 
-                const x1 = pX[i] * cosY - pZ[i] * sinY;
-                const z1 = pZ[i] * cosY + pX[i] * sinY;
-                const y2 = pY[i] * cosX - z1 * sinX;
-                const z2 = z1 * cosX + pY[i] * sinX;
-
-                const scale = focalLength / (focalLength + z2 * currentR);
-                const sR = scale * currentR;
+                scale = focalLength / (focalLength + z2 * currentR);
+                sR = scale * currentR;
 
                 let alpha, size;
                 if (z2 > 0) {
@@ -729,6 +837,7 @@
                 if (pIsCity[i] && z2 < 0 && Math.random() > 0.8) {
                     ctx.globalAlpha = alpha * 0.3;
                     ctx.fillRect(cx + x1 * sR - size, cy + y2 * sR - size, size * 3, size * 3);
+                    lastAlpha = -1; // Reset tracker because we modified globalAlpha without updating it
                 }
             }
             ctx.globalAlpha = 1;
@@ -750,6 +859,23 @@
             const consoleDiv = document.getElementById('console-text');
             let lineIdx = 0;
             let currentLines = [];
+
+            // Button Event Listeners
+            document.getElementById('toggle-stars').addEventListener('click', function() {
+                showStars = !showStars;
+                this.classList.toggle('active');
+            });
+            document.getElementById('toggle-sats').addEventListener('click', function() {
+                showSats = !showSats;
+                this.classList.toggle('active');
+            });
+            document.getElementById('toggle-labels').addEventListener('click', function() {
+                showLabels = !showLabels;
+                this.classList.toggle('active');
+            });
+            document.getElementById('manual-scan').addEventListener('click', function() {
+                manualScanY = 0;
+            });
 
             setInterval(() => {
                 if (lineIdx < consoleLines.length) {
